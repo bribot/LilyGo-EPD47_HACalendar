@@ -384,11 +384,6 @@ void drawImage(const char* url, const Rect_t& rect) {
             } else { Serial.println("ERROR: Failed to open PNG"); }
             break;
 
-        case IMG_BMP:
-            Serial.println("Detected: BMP");
-            drawBMP(imgBuf, bytesRead);
-            break;
-
         default:
             Serial.println("ERROR: Unknown image format!");
             break;
