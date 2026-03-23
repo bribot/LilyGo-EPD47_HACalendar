@@ -11,7 +11,8 @@ A Pokemon-themed e-paper dashboard for the **LilyGo T5 4.7" e-paper display** (E
 - Today's calendar events from a HA calendar entity
 - Pokemon battle scene background that changes by weekday
 - Pokemon sprite that changes with weather condition
-- Wakes every hour via deep sleep, then refreshes the display
+- Wakes every half hour via deep sleep, then refreshes the display
+- HP bars represents how much of the day is left and how much of the month is left
 
 ---
 

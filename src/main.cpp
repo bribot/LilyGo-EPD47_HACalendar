@@ -7,13 +7,9 @@
 #include <PNGdec.h>
 #include <ArduinoJson.h>
 #include <vector>
-#include <SD.h> // TODO READ THE IMAGES FROM SD CARD
+#include <SD.h>
+#include <SPI.h>
 
-// #include "../fonts/opensans26b.h"
-#include "../fonts/astrolyt60.h"
-#include "../fonts/astrolyt250_nums.h"
-#include "../fonts/opensans16b.h"
-#include "../fonts/astrolyt40b.h"
 #include "../fonts/pokemongb40.h"
 #include "../fonts/pokemongb30.h"
 #include "../fonts/pokemongb16.h"
@@ -25,6 +21,7 @@
 
 #define EPD_WIDTH  960
 #define EPD_HEIGHT 540
+#define FILESYSTEM SD
 
 // ------------Config ------------
 const char* ssid     = WIFI_SSID;
@@ -40,7 +37,8 @@ const uint16_t pokemonSize = 200;
 const char* ENTITY_DATE = "sensor.date";
 const char* ENTITY_WEEKDAY = "sensor.weekday";
 const char* ENTITY_WEATHER = "weather.forecast_home"; 
-const char* ENTITY_CALENDAR = "calendar.personal"; // PLACEHOLDER
+const char* ENTITY_CALENDAR = "calendar.personal"; 
+const char* ENTITY_TIME = "sensor.time";
 
 const GFXfont DEFAULT_FONT = PokemonGB_16;
 // ------------Layout ------------
@@ -124,16 +122,32 @@ const Rect_t pkmnRect_base = {
     .width = 510,
     .height = 130
 };
+const Rect_t player_hp = {
+    .x = 696,
+    .y = 267,
+    .width = 190,
+    .height = 13
+};
+const Rect_t pkmn_hp = {
+    .x = 174,
+    .y = 74,
+    .width = 190,
+    .height = 13
+};
 
 // ------------Globals ------------
 uint8_t *framebuffer = nullptr;
 JPEGDEC jpeg;
 PNG png;
+bool sdCard = false;
 
-char* imgUrl = "http://homeassistant.local:8123/local/pokemonCalendar/";//clear-night.png";
-char* playerUrl = "http://homeassistant.local:8123/local/pokemonCalendar/player.png";
-char* sceneURL = "http://homeassistant.local:8123/local/pokemonCalendar/scene.png";
-char * baseURL = "http://homeassistant.local:8123/local/pokemonCalendar/base.png";
+char* imgUrl = "http://homeassistant.local:8123/local/pokemonCalendar/";
+char* scenePath = "scene.png"; // "http://homeassistant.local:8123/local/pokemonCalendar/scene.png";
+char* basePath = "base.png"; // "http://homeassistant.local:8123/local/pokemonCalendar/base.png";
+char* sdRootDir = "/HACalendar" ;
+char* baseImgFile = "base.png";
+char* errorPath = "error.png";
+
 
 struct ImageDrawContext {
     Rect_t rect;
@@ -212,17 +226,6 @@ inline void writePixel(int imgX, int imgY, uint8_t gray) {
     epd_draw_pixel(epx,epy,gray,framebuffer);
 }
 
-void drawArea(const Rect_t& rect, uint8_t* imageData) {
-    // For simplicity, let's assume imageData is a raw bitmap matching rect dimensions
-    for (int y = 0; y < rect.height; y++) {
-        for (int x = 0; x < rect.width; x++) {
-            int idx = y * rect.width + x;
-            uint8_t color = imageData[idx];
-            epd_draw_pixel(rect.x + x, rect.y + y, color, framebuffer);
-        }
-    }
-}  
-
 int jpegDrawCallback(JPEGDRAW *pDraw) {
     for (int y = 0; y < pDraw->iHeight; y++) {
         for (int x = 0; x < pDraw->iWidth; x++) {
@@ -271,91 +274,32 @@ ImageType detectImageType(uint8_t *buf, int len) {
     if (len < 4) return IMG_UNKNOWN;
     if (buf[0] == 0xFF && buf[1] == 0xD8 && buf[2] == 0xFF) return IMG_JPEG;
     if (buf[0] == 0x89 && buf[1] == 0x50 && buf[2] == 0x4E && buf[3] == 0x47) return IMG_PNG;
-    if (buf[0] == 0x42 && buf[1] == 0x4D) return IMG_BMP;
     return IMG_UNKNOWN;
 }
 
-void drawBMP(uint8_t *buf, int len) {
-    if (len < 54) { Serial.println("ERROR: BMP too small"); return; }
-
-    uint32_t dataOffset  = buf[10] | (buf[11] << 8) | (buf[12] << 16) | (buf[13] << 24);
-    uint32_t headerSize  = buf[14] | (buf[15] << 8) | (buf[16] << 16) | (buf[17] << 24);
-    int32_t  imgWidth    = buf[18] | (buf[19] << 8) | (buf[20] << 16) | (buf[21] << 24);
-    int32_t  imgHeight   = buf[22] | (buf[23] << 8) | (buf[24] << 16) | (buf[25] << 24);
-    uint16_t bpp         = buf[28] | (buf[29] << 8);
-    uint32_t compression = buf[30] | (buf[31] << 8) | (buf[32] << 16) | (buf[33] << 24);
-
-    Serial.printf("BMP: %dx%d, %d bpp\n", imgWidth, imgHeight, bpp);
-
-    if (compression != 0) { Serial.println("ERROR: Compressed BMP not supported"); return; }
-    if (bpp != 24 && bpp != 4) { Serial.printf("ERROR: BMP bpp %d not supported (need 4 or 24)\n", bpp); return; }
-
-    imgDrawCtx.imgWidth  = imgWidth;
-    imgDrawCtx.imgHeight = abs(imgHeight);
-
-    bool topDown = imgHeight < 0;
-
-    if (bpp == 24) {
-        int rowSize = ((imgWidth * 3 + 3) / 4) * 4;
-        for (int row = 0; row < abs(imgHeight); row++) {
-            int srcRow = topDown ? row : (abs(imgHeight) - 1 - row);
-            uint8_t *rowPtr = buf + dataOffset + srcRow * rowSize;
-            for (int x = 0; x < imgWidth; x++) {
-                uint8_t b    = rowPtr[x * 3 + 0];
-                uint8_t g    = rowPtr[x * 3 + 1];
-                uint8_t r    = rowPtr[x * 3 + 2];
-                uint8_t gray = (r * 299 + g * 587 + b * 114) / 1000;
-                writePixel(x, row, gray);
-            }
-        }
-    } else { // bpp == 4
-        uint8_t *palette = buf + 14 + headerSize; // 16 entries x 4 bytes (B,G,R,0)
-
-        // Precompute 16-entry grayscale lookup from palette
-        uint8_t grayLUT[16];
-        for (int i = 0; i < 16; i++) {
-            uint8_t b = palette[i * 4 + 0];
-            uint8_t g = palette[i * 4 + 1];
-            uint8_t r = palette[i * 4 + 2];
-            grayLUT[i] = (r * 299 + g * 587 + b * 114) / 1000;
-        }
-
-        int rowSize = (((imgWidth + 1) / 2) + 3) & ~3; // padded to 4 bytes
-        for (int row = 0; row < abs(imgHeight); row++) {
-            int srcRow = topDown ? row : (abs(imgHeight) - 1 - row);
-            uint8_t *rowPtr = buf + dataOffset + srcRow * rowSize;
-
-            // Scale destination row once per row
-            int ry = (row * imgDrawCtx.rect.height) / imgDrawCtx.imgHeight;
-            int epy = imgDrawCtx.rect.y + ry;
-            if (epy >= EPD_HEIGHT) continue;
-
-            for (int x = 0; x < imgWidth; x++) {
-                uint8_t byte = rowPtr[x / 2];
-                uint8_t idx  = (x % 2 == 0) ? (byte >> 4) : (byte & 0x0F);
-                uint8_t gray = grayLUT[idx];
-
-                int rx  = (x * imgDrawCtx.rect.width) / imgDrawCtx.imgWidth;
-                int epx = imgDrawCtx.rect.x + rx;
-                if (epx >= EPD_WIDTH) continue;
-
-                // Write 4-bit gray level directly to framebuffer
-                uint8_t level = gray >> 4;
-                int byteIndex = (epy * EPD_WIDTH + epx) / 2;
-                if (epx % 2 == 0)
-                    framebuffer[byteIndex] = (framebuffer[byteIndex] & 0x0F) | (level << 4);
-                else
-                    framebuffer[byteIndex] = (framebuffer[byteIndex] & 0xF0) | level;
-            }
-        }
-    }
-}
 
 void drawImage(const char* url, const Rect_t& rect) {
     imgDrawCtx.rect = rect;
 
     int bytesRead = 0;
-    uint8_t *imgBuf = downloadImage(url, bytesRead);
+    uint8_t *imgBuf;
+    if (!sdCard){
+        String imgPath = String(imgUrl) + url;
+        imgBuf = downloadImage(imgPath.c_str(), bytesRead);
+    } else {
+        String imgPath = String(sdRootDir) + "/" + url;
+        File imgFile = FILESYSTEM.open(imgPath.c_str(), "r");
+        if (!imgFile) {
+            Serial.println("File not found!");
+            imgPath = String(sdRootDir) + "/" + errorPath;
+            imgFile = FILESYSTEM.open(imgPath.c_str(), "r");
+        }
+        bytesRead = imgFile.size();
+        imgBuf = (uint8_t*)heap_caps_malloc(bytesRead, MALLOC_CAP_8BIT | MALLOC_CAP_INTERNAL);
+        if (!imgBuf) imgBuf = (uint8_t*)heap_caps_malloc(bytesRead, MALLOC_CAP_SPIRAM);
+        if (imgBuf) imgFile.read(imgBuf, bytesRead);
+        imgFile.close();
+    }
     if (!imgBuf) return;
 
     switch (detectImageType(imgBuf, bytesRead)) {
@@ -394,10 +338,7 @@ void drawImage(const char* url, const Rect_t& rect) {
 
  
 // ----------- Drawing helpers -----------
- 
-// Draw a rectangle border around a Rect_t area
-// thickness: number of pixels for the border (1 = single pixel)
-// color: 0=black, 255=white
+
 void drawRect(const Rect_t& rect, uint8_t thickness = 1, uint8_t color = 0) {
     for (uint8_t t = 0; t < thickness; t++) {
         // top
@@ -475,7 +416,7 @@ HAEntity fetchHAEntity(const char* entity_id) {
     return result;
 }
 
-// Convenience wrapper for simple state-only sensors
+// simple state-only sensors
 String fetchHASensorState(const char* entity_id) {
     return fetchHAEntity(entity_id).state;
 }
@@ -590,6 +531,7 @@ void drawTextArea(const Rect_t& rect, const char* text, const GFXfont* font = &D
     }
 }
 
+
 void drawCalendar(){
     String dateStr = fetchHASensorState(ENTITY_DATE);
     if (dateStr.isEmpty()) {
@@ -622,19 +564,19 @@ void drawCalendar(){
     drawTextArea(calendarRect, display.c_str(), &PokemonGB_12);
 }
 
-void drawPkmn(){
+void drawPkmn(const char* imgPath){
     epd_clear_area(pkmnRect);
-    drawImage(baseURL, pkmnRect_base);
-    drawImage(imgUrl, pkmnRect);
+    drawImage(basePath, pkmnRect_base);
+    drawImage(imgPath, pkmnRect);
 }
 
 void drawScene(){
         String weekdayStr = fetchHASensorState(ENTITY_WEEKDAY);
-        static char weekdayUrl[128];
+        static char weekdayUrl[64];
         snprintf(weekdayUrl, sizeof(weekdayUrl),
-        "http://homeassistant.local:8123/local/pokemonCalendar/%s.png",
+        "%s.png",
         weekdayStr.c_str());
-        drawImage(sceneURL, epd_full_screen());
+        drawImage(scenePath, epd_full_screen());
         epd_clear_area(pkmnRect_playerbase);
         drawImage(weekdayUrl, pkmnRect_player);
         
@@ -656,13 +598,10 @@ void drawWeather() {
         Serial.println("Weather unchanged, skipping redraw");
         return;
     }
+    static char weatherPath[64];
+    snprintf(weatherPath, sizeof(weatherPath), "%s.png", weather.condition.c_str());
 
-    static char weatherImgUrl[128];
-    snprintf(weatherImgUrl, sizeof(weatherImgUrl),
-        "http://homeassistant.local:8123/local/pokemonCalendar/%s.png",
-        weather.condition.c_str());
-    imgUrl = weatherImgUrl;
-    drawPkmn();
+    drawPkmn(weatherPath);
     drawTextArea(weatherConditionRect, weather.condition.c_str());
 
     // Temperature
@@ -674,6 +613,16 @@ void drawWeather() {
     drawTextArea(weatherHumidRect, humStr.c_str());
 
     strcpy(lastWeatherStr, weatherStr.c_str());
+}
+
+void drawTime(){
+    String timeNow = fetchHASensorState(ENTITY_TIME);
+    String hour = timeNow.substring(0,2);
+    // Serial.println(hour);
+    uint8_t hpLenght = player_hp.width * (24-hour.toInt())/24;
+    epd_fill_rect(player_hp.x,player_hp.y,player_hp.width,player_hp.height,255,framebuffer);
+    epd_fill_rect(player_hp.x,player_hp.y,hpLenght,player_hp.height,50,framebuffer);
+
 }
 
 void drawDate() {
@@ -688,12 +637,18 @@ void drawDate() {
         return;
     }
     drawScene();
+
     Serial.println("Updating DATE!");
     // Date fromat 2020-12-31
     String day = dateStr.substring(8,10);
     String month = dateStr.substring(5,7);
     String year = dateStr.substring(0,4);
- 
+
+    // Foe's hp is how much of the month is left
+    uint8_t hpLenght = pkmn_hp.width * (31-day.toInt())/31;
+    epd_fill_rect(pkmn_hp.x,pkmn_hp.y,pkmn_hp.width,pkmn_hp.height,255,framebuffer);
+    epd_fill_rect(pkmn_hp.x,pkmn_hp.y,hpLenght,pkmn_hp.height,50,framebuffer);
+
     epd_clear_area(DateRect);
     epd_fill_rect(DateRect.x-10, DateRect.y, DateRect.width+20, DateRect.height, 70, framebuffer);
     drawTextArea(DateRect_day, day.c_str(), &PokemonGB_30, 0, 0, true);
@@ -717,15 +672,26 @@ void setup() {
     while (WiFi.status() != WL_CONNECTED) { delay(300); Serial.print("."); }
     Serial.printf("\nConnected to %s! \nIP: %s\n", ssid, WiFi.localIP().toString().c_str());
 
+    SPI.begin(SD_SCLK, SD_MISO, SD_MOSI);
+    bool SDready = FILESYSTEM.begin(SD_CS, SPI);
+    if (!SDready){
+        Serial.println("SD Not detected!");
+        sdCard = false;
+    } else {
+        Serial.println("SD Card Initialized!");
+        sdCard = true;
+    }
+
     drawInitScreen();
     //drawScene();
     drawDate();
     drawWeather();
     drawCalendar();
+    drawTime();
     epd_draw_image(epd_full_screen(), framebuffer, BLACK_ON_WHITE);
 }
     
 void loop() {
-    esp_sleep_enable_timer_wakeup(60ULL * 30 * 1000000); // change to 60 
+    esp_sleep_enable_timer_wakeup(60ULL * 30 * 1000000);
     esp_deep_sleep_start();
 }
