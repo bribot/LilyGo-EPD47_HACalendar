@@ -42,6 +42,8 @@ const char* ENTITY_TIME = "sensor.time";
 
 const GFXfont DEFAULT_FONT = PokemonGB_16;
 // ------------Layout ------------
+int8_t yoffset_default = -15;
+int8_t xoffset_default = 5;
 const Rect_t DateRect = {  
     .x = 60, 
     .y = 380, 
@@ -75,22 +77,22 @@ const Rect_t DateRect_year = {
 // };
 // Weather sub-rects
 const Rect_t weatherConditionRect = {
-    .x = 50,
-    .y = 10,
-    .width = 250,
-    .height = 50
+    .x = 45,// x and widht must be multiple of 16 to avoid artifactsbecause epd_push_pixels is dumb and rewrite it would be too much of a hassle
+    .y = 20,
+    .width = 302,
+    .height = 35
 };
 const Rect_t weatherTempRect = {
-    .x = 570,
-    .y = 205,
+    .x = 568,
+    .y = 220,
     .width = 200,
-    .height = 50
+    .height = 35
 };
 const Rect_t weatherHumidRect = {
     .x = 780,
-    .y = 205,
+    .y = 220,
     .width = 100,
-    .height = 50
+    .height = 35
 };
 const Rect_t calendarRect = {  
     .x = 510, 
@@ -99,7 +101,7 @@ const Rect_t calendarRect = {
     .height = 130 
 };
 const Rect_t pkmnRect = {  
-    .x = 620, 
+    .x = 616, 
     .y = 0, 
     .width = pokemonSize, 
     .height = pokemonSize 
@@ -214,6 +216,17 @@ uint8_t* downloadImage(const char* url, int& bytesRead) {
 }
 
 // ----------- Image rendering -----------
+
+// overloading the clear area function because the original one sucks
+void epd_clear_area2(const Rect_t& rect) {
+    int32_t cycle_time = 50;
+    uint8_t cycle_count = 20;
+    epd_fill_rect(rect.x, rect.y, rect.width, rect.height, 255, framebuffer);
+    for (int i = 0; i < cycle_count; i++) {
+        epd_push_pixels(rect, cycle_time, 1);
+    }
+    
+}
 
 inline void writePixel(int imgX, int imgY, uint8_t gray) {
     int rx = (imgX * imgDrawCtx.rect.width)  / imgDrawCtx.imgWidth;
@@ -499,7 +512,7 @@ void drawInitScreen() {
     epd_poweroff();
 }
 
-void drawTextArea(const Rect_t& rect, const char* text, const GFXfont* font = &DEFAULT_FONT, uint8_t xoffset = 0, uint8_t yoffset = 0, bool white = false) {
+void drawTextArea(const Rect_t& rect, const char* text, const GFXfont* font = &DEFAULT_FONT, int8_t xoffset = xoffset_default, int8_t yoffset = yoffset_default, bool white = false) {
     int32_t cursor_x = rect.x + xoffset;
     int32_t cursor_y = rect.y + yoffset + font->advance_y + font->descender;
 
@@ -525,7 +538,8 @@ void drawTextArea(const Rect_t& rect, const char* text, const GFXfont* font = &D
         }
         heap_caps_free(tmp);
     } else {
-        epd_clear_area(rect);
+        epd_clear_area2(rect);
+        //epd_fill_rect(rect.x, rect.y, rect.width, rect.height, 255, framebuffer);
         write_string(font, text, &cursor_x, &cursor_y, framebuffer);
         //writeln(font, text, &cursor_x, &cursor_y, framebuffer);
     }
@@ -561,11 +575,11 @@ void drawCalendar(){
     }
 
     Serial.println("Calendar display: " + display);
-    drawTextArea(calendarRect, display.c_str(), &PokemonGB_12);
+    drawTextArea(calendarRect, display.c_str(), &PokemonGB_12, 0, 0);
 }
 
 void drawPkmn(const char* imgPath){
-    epd_clear_area(pkmnRect);
+    epd_clear_area2(pkmnRect);
     drawImage(basePath, pkmnRect_base);
     drawImage(imgPath, pkmnRect);
 }
@@ -577,7 +591,7 @@ void drawScene(){
         "%s.png",
         weekdayStr.c_str());
         drawImage(scenePath, epd_full_screen());
-        epd_clear_area(pkmnRect_playerbase);
+        epd_clear_area2(pkmnRect_playerbase);
         drawImage(weekdayUrl, pkmnRect_player);
         
 }
@@ -649,7 +663,7 @@ void drawDate() {
     epd_fill_rect(pkmn_hp.x,pkmn_hp.y,pkmn_hp.width,pkmn_hp.height,255,framebuffer);
     epd_fill_rect(pkmn_hp.x,pkmn_hp.y,hpLenght,pkmn_hp.height,50,framebuffer);
 
-    epd_clear_area(DateRect);
+    epd_clear_area2(DateRect);
     epd_fill_rect(DateRect.x-10, DateRect.y, DateRect.width+20, DateRect.height, 70, framebuffer);
     drawTextArea(DateRect_day, day.c_str(), &PokemonGB_30, 0, 0, true);
     drawTextArea(DateRect_month, months[month.toInt()], &PokemonGB_30, 0, 0, true);
