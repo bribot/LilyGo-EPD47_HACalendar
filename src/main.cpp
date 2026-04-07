@@ -634,7 +634,8 @@ void drawTime(){
     String hour = timeNow.substring(0,2);
     // Serial.println(hour);
     uint8_t hpLenght = player_hp.width * (24-hour.toInt())/24;
-    epd_fill_rect(player_hp.x,player_hp.y,player_hp.width,player_hp.height,255,framebuffer);
+    //epd_fill_rect(player_hp.x,player_hp.y,player_hp.width,player_hp.height,255,framebuffer);
+    epd_clear_area2(player_hp);
     epd_fill_rect(player_hp.x,player_hp.y,hpLenght,player_hp.height,50,framebuffer);
 
 }
